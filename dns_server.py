@@ -39,12 +39,62 @@ class Cache:
     def set(self, k, v, ttl=300):
         with self._l:
             if len(self._d) > 10000:
-                old = min(self._d, key=lambda x: self._d[x][1])
-                del self._d[old]
-            self._d[k] = (v, time.time() + ttl)
+                old = min(self.d, key=lambda x: self._d[x][1])
+                del self.d[old]
+            self.d[k] = (v, time.time() + ttl)
     def size(self):
-        with self._l: return len(self._d)
-    def clear(self):
-        with self._l: self._d.clear()
+      with self.l: return len(self.d)
+    def clear(self):with self.l: self.d.clear()
 class Blocklist:
-    DEFAULT = {"doubleclick.net","googleadservices.com","googlesyndication.com","adservice.google.com","pagead2.googlesyndication.com","ads.google.com","googleads.g.doubleclick.net","connect.facebook.net","ads.facebook.com","an.facebook.com","amazon-adsystem.com","aax.amazon-adsystem.com","scorecardresearch.com","quantserve.com","moatads.com","adsrvr.org","adnxs.com","outbrain.com","taboola.com","revcontent.com","criteo.com","criteo.net","pubmatic.com","rubiconproject.com","openx.net","appnexus.com","advertising.com","casalemedia.com","bidswitch.net","smaato.net","inmobi.com","bat.bing.com","hotjar.com","mouseflow.com","fullstory.com","segment.io","mixpanel.com",}
+DEFAULT = {"doubleclick.net","googleadservices.com","googlesyndication.com","adservice.google.com","pagead2.googlesyndication.com","ads.google.com","googleads.g.doubleclick.net","connect.facebook.net","ads.facebook.com","an.facebook.com","amazon-adsystem.com","aax.amazon-adsystem.com","scorecardresearch.com","quantserve.com","moatads.com","adsrvr.org","adnxs.com","outbrain.com","taboola.com","revcontent.com","criteo.com","criteo.net","pubmatic.com","rubiconproject.com","openx.net","appnexus.com","advertising.com","casalemedia.com","bidswitch.net","smaato.net","inmobi.com","bat.bing.com","hotjar.com","mouseflow.com","fullstory.com","segment.io","mixpanel.com",}
+def init(self):self.domains = set(self.DEFAULT)
+self.l = threading.Lock()
+def update(self):
+   log.info("🔄 Updating blocklist..")
+    new = set(self.DEFAULT)
+      for url in BLOCKLIST_URLS:
+       count = 0
+          try:req = urllib.request.Request(url, headers={"User-Agent":"NBASecurity/1.0"})
+            with urllib.request.urlopen(req, timeout=20) as r:
+              for raw in r:
+                 line = raw.decode("utf-8", errors="ignore").strip()
+                  if not line or line.startswith("#"): continue
+                     parts = line.split()
+                      if len(parts)>=2 and parts[0] in ("0.0.0.0","127.0.0.1"):
+                        d = parts[1].lower().rstrip(".")
+                          if d and "." in d and d != "localhost":
+                            new.add(d); count += 1
+       log.info(f"+{count:,} ← {url.split('/')[-1]}")
+        except Exception as e:
+        log.warning(f"⚠️ {e}")
+        with self._l: self.domains = new
+        with lock: shared["blocklist_size"] = len(new)
+        log.info(f"✅ Blocklist updated successfully: {len(new):,} domain")
+    def is blocked(self, domain):
+        d = domain.lower().rstrip(".")
+        with self.l:
+            if d in self.domains: return True
+            parts = d.split(".")
+            for i in range(1, len(parts)):
+                if ".".join(parts[i:]) in self.domains: return True
+        return False
+    def auto update(self):
+        self.update()
+        while True:
+            time.sleep(BLOCKLIST UPDATE HOURS * 3600)
+            self.update()
+class CustomRules:
+    FILE = "custom rules.json"
+    def init (self):
+        self.blocked = set()
+        self.allowed = set()
+        self._l = threading.Lock()
+        self._load()
+    def load(self):
+        try:
+            with open(self.FILE) as f:
+                d = json.load(f)
+                self.blocked = set(d.get("blocked",[]))
+                self.allowed = set(d.get("allowed",[]))
+        except FileNotFoundError:
+            self.save()
