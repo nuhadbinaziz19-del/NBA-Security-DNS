@@ -98,3 +98,51 @@ class CustomRules:
                 self.allowed = set(d.get("allowed",[]))
         except FileNotFoundError:
             self.save()
+def _save(self):
+        with open(self.FILE,"w") as f:
+            json.dump({"blocked":list(self.blocked),"allowed":list(self.allowed)},f,indent=2)
+    def add_block(self, d):
+        with self._l: self.blocked.add(d.lower())
+        self._save()
+    def add_allow(self, d):
+        with self._l: self.allowed.add(d.lower())
+        self._save()
+    def remove(self, d):
+        d = d.lower()
+        with self._l: self.blocked.discard(d); self.allowed.discard(d)
+        self._save()
+    def is_whitelisted(self, d):
+        with self._l: return d.lower() in self.allowed
+    def is_blocked(self, d):
+        with self._l: return d.lower() in self.blocked
+def parse_query(data):
+    txid = struct.unpack("!H", data[:2])[0]
+    offset, labels = 12, []
+    while offset < len(data):
+        l = data[offset]
+        if l == 0: offset += 1; break
+        labels.append(data[offset+1:offset+1+l].decode("ascii", errors="ignore"))
+        offset += 1 + l
+    domain = ".".join(labels)
+    qtype = struct.unpack("!H", data[offset:offset+2])[0] if offset+2 <= len(data) else 1
+    return txid, domain, qtype
+def nxdomain(data, txid):
+    return struct.pack("!HHHHHH", txid, 0x8183, 1, 0, 0, 0) + data[12:]
+def forward(data):
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.settimeout(5)
+            s.sendto(data, UPSTREAM_DNS)
+            resp, _ = s.recvfrom(4096)
+            return resp
+    except Exception:
+        return None
+def log_query(domain, action, client):
+    with lock:
+        s = shared["stats"]
+        s["total"] += 1
+        if action in ("blocked","allowed","cached"): s[action] += 1
+        shared["log"].appendleft({
+            "time": datetime.now().strftime("%H:%M:%S"),
+            "domain": domain, "action": action, "client": client
+        })
