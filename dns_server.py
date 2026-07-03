@@ -146,3 +146,89 @@ def log_query(domain, action, client):
             "time": datetime.now().strftime("%H:%M:%S"),
             "domain": domain, "action": action, "client": client
         })
+      if action == "blocked": shared["top_blocked"][domain] += 1
+        shared["cache_size"] = cache.size()
+def handle(data, client_ip, send_fn):
+    try:
+        txid, domain, qtype = parse_query(data)
+        key = f"{domain.lower()}:{qtype}"
+        if rules.is_whitelisted(domain):
+            pass
+        elif rules.is_blocked(domain) or blocklist.is_blocked(domain):
+            send_fn(nxdomain(data, txid))
+            log_query(domain, "blocked", client_ip)
+            log.info(f"🚫 {domain:<50} ← {client_ip}")
+            return
+        cached = cache.get(key)
+        if cached:
+            send_fn(struct.pack("!H", txid) + cached[2:])
+            log_query(domain, "cached", client_ip)
+            return
+        resp = forward(data)
+if resp:
+send_fn(resp); cache.set(key, resp)
+log_query(domain, "allowed", client_ip)
+else:
+log_query(domain, "error", client_ip)
+except Exception as e:
+log.error(f"Handle error: {e}")
+def dot_server():
+ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+try:
+ctx.load_cert_chain(CERT_FILE, KEY_FILE)
+except FileNotFoundError:
+log.warning("⚠️ No SSL cert — DoT disabled. Run setup.sh.")
+return
+with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as raw:
+raw.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+raw.bind((LISTEN_HOST, DOT_PORT))
+raw.listen(100)
+log.info(f"🔒 DNS-over-TLS run — Port {DOT_PORT}")
+with ctx.wrap_socket(raw, server_side=True) as tls:
+while True:
+try:
+conn, addr = tls.accept()
+threading.Thread(target=_dot_conn, args=(conn, addr[0]), daemon=True).start()
+except Exception as e:log.error(f"DoT error: {e}")
+def recvexact(conn, n):
+buf = b""
+while len(buf) < n:
+try:
+chunk = conn.recv(n - len(buf))
+if not chunk: return None
+buf += chunk
+except Exception: return None
+return buf
+defdotconn(conn, client_ip):
+try:
+with conn:conn.settimeout(10)
+while True: lb = recvexact(conn, 2)
+if not lb: break
+length = struct.unpack("!H", lb)[0]
+data = recvexact(conn, length)
+if not data: break
+handle(data, client_ip,lambda r: conn.sendall(struct.pack("!H", len(r)) + r))
+except Exception:pass
+def udp_server():
+try:
+with socket.socket(socket.AFINET, socket.SOCKDGRAM) as s:
+s.setsockopt(socket.SOLSOCKET, socket.SOREUSEADDR, 1)
+s.bind((LISTENHOST, UDPPORT))
+log.info(f"📡 Plain DNS RUN Port {UDPPORT}")
+while True:data, addr = s.recvfrom(512)
+threading.Thread(target=handle,args=(data,addr[0],lambda r,a=addr,sock=s:sock.sendto(r,a)),daemon=True).
+start()
+except PermissionError:log.error("❌ Sudo required for Port 53")
+except Exception as e:log.error(f"UDP error: {e}")
+cache = Cache()
+blocklist = Blocklist()
+rules = CustomRules()
+def start():
+    threading.Thread(target=blocklist.auto_update, daemon=True).start()
+    threading.Thread(target=dotserver, daemon=True).start()
+    threading.Thread(target=udpserver, daemon=True).start()
+    log.info(f"🚀 NBASecurity DNS RUN! Domain: {DOMAIN}")
+if name== "main":
+    start()
+    while True: time.sleep(60)
+
